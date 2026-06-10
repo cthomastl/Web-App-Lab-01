@@ -201,53 +201,91 @@ cat > /opt/app/templates/index.html << 'HTMLEOF'
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Northside Ballers</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #111; color: #f0f0f0; min-height: 100vh; }
+        header { background: #1a1a2e; border-bottom: 3px solid #e94560; padding: 24px 32px; }
+        header h1 { font-size: 2rem; color: #fff; letter-spacing: 1px; }
+        header p { color: #aaa; margin-top: 4px; font-size: 0.9rem; }
+        main { max-width: 800px; margin: 40px auto; padding: 0 24px; }
+        h2 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 2px; color: #e94560; margin-bottom: 16px; }
+        #roster-error { background: #3a1a1a; border: 1px solid #e94560; color: #ff6b6b; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; display: none; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
+        thead { background: #1a1a2e; }
+        th { padding: 12px 16px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
+        td { padding: 14px 16px; border-bottom: 1px solid #222; }
+        tbody tr:hover { background: #1a1a1a; }
+        .jersey-number { font-weight: bold; color: #e94560; font-size: 1.1rem; width: 60px; }
+        .position-badge { display: inline-block; background: #1a1a2e; border: 1px solid #e94560; color: #e94560; font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 3px; letter-spacing: 1px; }
+        .btn-remove { background: none; border: 1px solid #444; color: #888; padding: 4px 12px; border-radius: 3px; cursor: pointer; font-size: 0.8rem; transition: border-color 0.15s, color 0.15s; }
+        .btn-remove:hover { border-color: #e94560; color: #e94560; }
+        .add-section { background: #1a1a1a; border: 1px solid #222; border-radius: 6px; padding: 24px; }
+        .form-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
+        .form-group input, .form-group select { background: #111; border: 1px solid #333; color: #f0f0f0; padding: 8px 12px; border-radius: 4px; font-size: 0.95rem; outline: none; transition: border-color 0.15s; }
+        .form-group input:focus, .form-group select:focus { border-color: #e94560; }
+        .form-group input[type="text"] { width: 220px; }
+        .form-group input[type="number"] { width: 100px; }
+        .form-group select { width: 200px; }
+        .btn-add { background: #e94560; border: none; color: #fff; padding: 9px 24px; border-radius: 4px; font-size: 0.95rem; font-weight: bold; cursor: pointer; align-self: flex-end; transition: background 0.15s; }
+        .btn-add:hover { background: #c73652; }
+        #form-message { margin-top: 12px; font-size: 0.9rem; color: #aaa; min-height: 20px; }
+    </style>
 </head>
 <body>
-    <h1>Northside Ballers</h1>
-    <h2>Team Roster</h2>
+    <header>
+        <h1>Northside Ballers</h1>
+        <p>Team Roster</p>
+    </header>
 
-    <p id="roster-error" style="color: red; display: none;"></p>
+    <main>
+        <h2>Players</h2>
 
-    <table id="roster-table" border="1" cellpadding="6">
-        <thead>
-            <tr>
-                <th>Number</th>
-                <th>Name</th>
-                <th>Position</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody id="roster-body">
-            <tr><td colspan="4">Loading roster...</td></tr>
-        </tbody>
-    </table>
+        <p id="roster-error"></p>
 
-    <br>
-    <h3>Add Player</h3>
+        <table id="roster-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Position</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="roster-body">
+                <tr><td colspan="4">Loading roster...</td></tr>
+            </tbody>
+        </table>
 
-    <form id="add-form">
-        <label>Name:
-            <input type="text" id="player-name" required>
-        </label>
-        <br><br>
-        <label>Position:
-            <select id="player-position">
-                <option value="PG">PG - Point Guard</option>
-                <option value="SG">SG - Shooting Guard</option>
-                <option value="SF">SF - Small Forward</option>
-                <option value="PF">PF - Power Forward</option>
-                <option value="C">C - Center</option>
-            </select>
-        </label>
-        <br><br>
-        <label>Jersey Number:
-            <input type="number" id="player-number" min="0" max="99" required>
-        </label>
-        <br><br>
-        <button type="submit">Add Player</button>
-    </form>
-
-    <p id="form-message"></p>
+        <div class="add-section">
+            <h2>Add Player</h2>
+            <form id="add-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="player-name">Name</label>
+                        <input type="text" id="player-name" placeholder="Player name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="player-position">Position</label>
+                        <select id="player-position">
+                            <option value="PG">PG - Point Guard</option>
+                            <option value="SG">SG - Shooting Guard</option>
+                            <option value="SF">SF - Small Forward</option>
+                            <option value="PF">PF - Power Forward</option>
+                            <option value="C">C - Center</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="player-number">Jersey #</label>
+                        <input type="number" id="player-number" min="0" max="99" placeholder="0" required>
+                    </div>
+                    <button type="submit" class="btn-add">Add Player</button>
+                </div>
+            </form>
+            <p id="form-message"></p>
+        </div>
+    </main>
 
     <script>
         function loadRoster() {
@@ -256,29 +294,25 @@ cat > /opt/app/templates/index.html << 'HTMLEOF'
                 .then(function(data) {
                     var error = document.getElementById('roster-error');
                     var tbody = document.getElementById('roster-body');
-
                     if (data.error) {
                         error.textContent = 'Could not load roster: ' + data.error;
                         error.style.display = 'block';
                         tbody.innerHTML = '<tr><td colspan="4">Roster unavailable.</td></tr>';
                         return;
                     }
-
                     error.style.display = 'none';
-
                     if (data.length === 0) {
                         tbody.innerHTML = '<tr><td colspan="4">No players on roster.</td></tr>';
                         return;
                     }
-
                     tbody.innerHTML = '';
                     data.forEach(function(player) {
                         var row = document.createElement('tr');
                         row.innerHTML =
-                            '<td>' + player.number + '</td>' +
+                            '<td class="jersey-number">' + player.number + '</td>' +
                             '<td>' + player.name + '</td>' +
-                            '<td>' + player.position + '</td>' +
-                            '<td><button onclick="removePlayer(' + player.id + ')">Remove</button></td>';
+                            '<td><span class="position-badge">' + player.position + '</span></td>' +
+                            '<td><button class="btn-remove" onclick="removePlayer(' + player.id + ')">Remove</button></td>';
                         tbody.appendChild(row);
                     });
                 })
@@ -311,7 +345,6 @@ cat > /opt/app/templates/index.html << 'HTMLEOF'
             var position = document.getElementById('player-position').value;
             var number = parseInt(document.getElementById('player-number').value, 10);
             var msg = document.getElementById('form-message');
-
             fetch('/api/players', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
