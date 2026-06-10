@@ -13,8 +13,8 @@
 
         body {
             font-family: Arial, sans-serif;
-            background: #111;
-            color: #f0f0f0;
+            background: #f4f4f4;
+            color: #1a1a1a;
             min-height: 100vh;
         }
 
@@ -51,9 +51,9 @@
         }
 
         #roster-error {
-            background: #3a1a1a;
+            background: #fff0f0;
             border: 1px solid #e94560;
-            color: #ff6b6b;
+            color: #c0392b;
             padding: 12px 16px;
             border-radius: 4px;
             margin-bottom: 16px;
@@ -64,6 +64,10 @@
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 40px;
+            background: #fff;
+            border-radius: 6px;
+            overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
         }
 
         thead {
@@ -81,11 +85,15 @@
 
         td {
             padding: 14px 16px;
-            border-bottom: 1px solid #222;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
         }
 
         tbody tr:hover {
-            background: #1a1a1a;
+            background: #fafafa;
         }
 
         .jersey-number {
@@ -97,7 +105,7 @@
 
         .position-badge {
             display: inline-block;
-            background: #1a1a2e;
+            background: #fff0f3;
             border: 1px solid #e94560;
             color: #e94560;
             font-size: 0.75rem;
@@ -109,7 +117,7 @@
 
         .btn-remove {
             background: none;
-            border: 1px solid #444;
+            border: 1px solid #ccc;
             color: #888;
             padding: 4px 12px;
             border-radius: 3px;
@@ -124,10 +132,11 @@
         }
 
         .add-section {
-            background: #1a1a1a;
-            border: 1px solid #222;
+            background: #fff;
+            border: 1px solid #e8e8e8;
             border-radius: 6px;
             padding: 24px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
         }
 
         .form-row {
@@ -147,14 +156,14 @@
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: #aaa;
+            color: #666;
         }
 
         .form-group input,
         .form-group select {
-            background: #111;
-            border: 1px solid #333;
-            color: #f0f0f0;
+            background: #fff;
+            border: 1px solid #ccc;
+            color: #1a1a1a;
             padding: 8px 12px;
             border-radius: 4px;
             font-size: 0.95rem;
@@ -199,7 +208,7 @@
         #form-message {
             margin-top: 12px;
             font-size: 0.9rem;
-            color: #aaa;
+            color: #666;
             min-height: 20px;
         }
     </style>
@@ -265,21 +274,17 @@
                 .then(function(data) {
                     var error = document.getElementById('roster-error');
                     var tbody = document.getElementById('roster-body');
-
                     if (data.error) {
                         error.textContent = 'Could not load roster: ' + data.error;
                         error.style.display = 'block';
                         tbody.innerHTML = '<tr><td colspan="4">Roster unavailable.</td></tr>';
                         return;
                     }
-
                     error.style.display = 'none';
-
                     if (data.length === 0) {
                         tbody.innerHTML = '<tr><td colspan="4">No players on roster.</td></tr>';
                         return;
                     }
-
                     tbody.innerHTML = '';
                     data.forEach(function(player) {
                         var row = document.createElement('tr');
@@ -320,7 +325,6 @@
             var position = document.getElementById('player-position').value;
             var number = parseInt(document.getElementById('player-number').value, 10);
             var msg = document.getElementById('form-message');
-
             fetch('/api/players', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

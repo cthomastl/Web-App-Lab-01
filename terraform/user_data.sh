@@ -203,34 +203,35 @@ cat > /opt/app/templates/index.html << 'HTMLEOF'
     <title>Northside Ballers</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: Arial, sans-serif; background: #111; color: #f0f0f0; min-height: 100vh; }
+        body { font-family: Arial, sans-serif; background: #f4f4f4; color: #1a1a1a; min-height: 100vh; }
         header { background: #1a1a2e; border-bottom: 3px solid #e94560; padding: 24px 32px; }
         header h1 { font-size: 2rem; color: #fff; letter-spacing: 1px; }
         header p { color: #aaa; margin-top: 4px; font-size: 0.9rem; }
         main { max-width: 800px; margin: 40px auto; padding: 0 24px; }
         h2 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 2px; color: #e94560; margin-bottom: 16px; }
-        #roster-error { background: #3a1a1a; border: 1px solid #e94560; color: #ff6b6b; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; display: none; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
+        #roster-error { background: #fff0f0; border: 1px solid #e94560; color: #c0392b; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; display: none; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 40px; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
         thead { background: #1a1a2e; }
         th { padding: 12px 16px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
-        td { padding: 14px 16px; border-bottom: 1px solid #222; }
-        tbody tr:hover { background: #1a1a1a; }
+        td { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #fafafa; }
         .jersey-number { font-weight: bold; color: #e94560; font-size: 1.1rem; width: 60px; }
-        .position-badge { display: inline-block; background: #1a1a2e; border: 1px solid #e94560; color: #e94560; font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 3px; letter-spacing: 1px; }
-        .btn-remove { background: none; border: 1px solid #444; color: #888; padding: 4px 12px; border-radius: 3px; cursor: pointer; font-size: 0.8rem; transition: border-color 0.15s, color 0.15s; }
+        .position-badge { display: inline-block; background: #fff0f3; border: 1px solid #e94560; color: #e94560; font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 3px; letter-spacing: 1px; }
+        .btn-remove { background: none; border: 1px solid #ccc; color: #888; padding: 4px 12px; border-radius: 3px; cursor: pointer; font-size: 0.8rem; transition: border-color 0.15s, color 0.15s; }
         .btn-remove:hover { border-color: #e94560; color: #e94560; }
-        .add-section { background: #1a1a1a; border: 1px solid #222; border-radius: 6px; padding: 24px; }
+        .add-section { background: #fff; border: 1px solid #e8e8e8; border-radius: 6px; padding: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
         .form-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
         .form-group { display: flex; flex-direction: column; gap: 6px; }
-        .form-group label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
-        .form-group input, .form-group select { background: #111; border: 1px solid #333; color: #f0f0f0; padding: 8px 12px; border-radius: 4px; font-size: 0.95rem; outline: none; transition: border-color 0.15s; }
+        .form-group label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #666; }
+        .form-group input, .form-group select { background: #fff; border: 1px solid #ccc; color: #1a1a1a; padding: 8px 12px; border-radius: 4px; font-size: 0.95rem; outline: none; transition: border-color 0.15s; }
         .form-group input:focus, .form-group select:focus { border-color: #e94560; }
         .form-group input[type="text"] { width: 220px; }
         .form-group input[type="number"] { width: 100px; }
         .form-group select { width: 200px; }
         .btn-add { background: #e94560; border: none; color: #fff; padding: 9px 24px; border-radius: 4px; font-size: 0.95rem; font-weight: bold; cursor: pointer; align-self: flex-end; transition: background 0.15s; }
         .btn-add:hover { background: #c73652; }
-        #form-message { margin-top: 12px; font-size: 0.9rem; color: #aaa; min-height: 20px; }
+        #form-message { margin-top: 12px; font-size: 0.9rem; color: #666; min-height: 20px; }
     </style>
 </head>
 <body>
