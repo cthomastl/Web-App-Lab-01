@@ -56,7 +56,7 @@ resource "aws_instance" "flask_app" {
   instance_type          = var.instance_type
   key_name               = var.key_pair_name
   vpc_security_group_ids = [aws_security_group.flask_sg.id]
-  user_data              = file("${path.module}/user_data.sh")
+  user_data_base64       = base64gzip(file("${path.module}/user_data.sh"))
 
   tags = {
     Name = "flask-app-server"
