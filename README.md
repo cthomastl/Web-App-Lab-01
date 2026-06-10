@@ -46,7 +46,6 @@ web-app-lab-01/
 
 - Terraform >= 1.5
 - AWS credentials configured (`~/.aws/credentials` or environment variables)
-- An existing EC2 key pair in us-east-1
 
 ---
 
@@ -62,13 +61,13 @@ terraform init
 ### 2. Plan
 
 ```bash
-terraform plan -var="key_pair_name=your-key-name"
+terraform plan
 ```
 
 ### 3. Apply
 
 ```bash
-terraform apply -var="key_pair_name=your-key-name"
+terraform apply
 ```
 
 Wait 3-5 minutes after apply finishes. The EC2 instance runs the boot script to install
@@ -77,7 +76,7 @@ Docker, build the Flask image, and start all three containers.
 ### 4. Destroy when done
 
 ```bash
-terraform destroy -var="key_pair_name=your-key-name"
+terraform destroy
 ```
 
 ---
@@ -85,7 +84,7 @@ terraform destroy -var="key_pair_name=your-key-name"
 ## SSH and Verify
 
 ```bash
-ssh -i ~/.ssh/your-key-name.pem ec2-user@<PUBLIC_IP>
+ssh ec2-user@<PUBLIC_IP>
 ```
 
 Check container status:
