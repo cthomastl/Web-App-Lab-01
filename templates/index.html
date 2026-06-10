@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask App Monitor</title>
+</head>
+<body>
+    <h1>Flask App Monitor</h1>
+    <p>Server monitoring dashboard</p>
+
+    <div>
+        <button onclick="checkHealth()">Check Health</button>
+        <button onclick="viewLogs()">View Logs</button>
+    </div>
+
+    <br>
+    <textarea id="output" rows="20" cols="80" readonly style="font-family: monospace;"></textarea>
+
+    <script>
+        function checkHealth() {
+            document.getElementById('output').value = 'Loading...';
+            fetch('/health')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    document.getElementById('output').value = JSON.stringify(data, null, 2);
+                })
+                .catch(function(err) {
+                    document.getElementById('output').value = 'Error: ' + err;
+                });
+        }
+
+        function viewLogs() {
+            document.getElementById('output').value = 'Loading...';
+            fetch('/logs')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.lines) {
+                        document.getElementById('output').value = data.lines.join('');
+                    } else {
+                        document.getElementById('output').value = JSON.stringify(data, null, 2);
+                    }
+                })
+                .catch(function(err) {
+                    document.getElementById('output').value = 'Error: ' + err;
+                });
+        }
+    </script>
+</body>
+</html>
