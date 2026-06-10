@@ -1,13 +1,34 @@
 version: '3.8'
 
 services:
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    environment:
+      POSTGRES_DB:       basketball
+      POSTGRES_USER:     flask
+      POSTGRES_PASSWORD: flaskpass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+
   flask:
     build: .
     container_name: flask_app
+    environment:
+      DB_HOST:     localhost     # intentionally wrong — should be "db"
+      DB_PORT:     "5432"
+      DB_NAME:     basketball
+      DB_USER:     flask
+      DB_PASSWORD: flaskpass
     ports:
       - "5000:5000"
     volumes:
       - /var/log/flaskapp:/var/log/flaskapp
+    depends_on:
+      - db
     restart: unless-stopped
 
   nginx:
@@ -20,3 +41,6 @@ services:
     depends_on:
       - flask
     restart: unless-stopped
+
+volumes:
+  pgdata:

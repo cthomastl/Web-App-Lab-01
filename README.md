@@ -1,8 +1,16 @@
-# Flask App Monitor — AWS Lab
+# Northside Ballers — AWS Container Lab
 
-A Python Flask monitoring application deployed on AWS EC2 using Terraform and Docker.
+A basketball team roster app deployed on AWS EC2 using Terraform, Docker, and PostgreSQL.
+The frontend loads team data from a Flask API. The API reads and writes to a Postgres database.
 
-> **Note:** One component in this setup is intentionally misconfigured. You will encounter it when testing the deployed application. Use the Linux command line tools and Docker commands described below to find and fix it.
+Three containers run behind Nginx:
+
+```
+Browser -> nginx_proxy (port 80) -> flask_app (port 5000) -> postgres_db (port 5432)
+```
+
+> **Something in this setup is broken.** The page will load, but one feature will not work.
+> Use SSH, docker commands, and Linux tools to find and fix it.
 
 ---
 
@@ -11,36 +19,38 @@ A Python Flask monitoring application deployed on AWS EC2 using Terraform and Do
 ```
 web-app-lab-01/
 ├── README.md
-├── Dockerfile                  # Container definition for the Flask app
-├── docker-compose.yml          # Orchestrates Flask + Nginx services
-├── app.py                      # Flask application (routes: /, /health, /logs)
-├── requirements.txt            # Python dependencies
+├── Dockerfile                        # Flask app container
+├── docker-compose.yml                # All three services + named volume
+├── app.py                            # Flask API: GET/POST /api/players, DELETE /api/players/<id>
+├── requirements.txt
+├── initdb/
+│   └── 01_init.sql                   # Runs on first Postgres startup: creates table, seeds roster
 ├── templates/
-│   └── index.html              # HTML frontend
+│   └── index.html                    # Team roster page with add/remove player form
 ├── nginx/
-│   └── nginx.conf              # Nginx reverse proxy configuration
+│   └── nginx.conf                    # Reverse proxy config
 ├── scripts/
-│   ├── health_check.sh         # Checks disk, memory, and container status
-│   ├── log_rotate.sh           # Archives and resets the Flask log file
-│   └── deploy.sh               # Rebuilds and restarts the Flask container
+│   ├── db_backup.sh                  # pg_dump the database to /var/backups/basketball/
+│   ├── check_containers.sh           # Verify all containers are running; restart if not
+│   └── seed_players.sh               # Wipe and re-seed the players table
 └── terraform/
-    ├── main.tf                 # EC2 instance and security group
-    ├── variables.tf            # Input variables (region, AMI, key pair, etc.)
-    ├── outputs.tf              # Outputs: public IP, app URLs, SSH command
-    └── user_data.sh            # Boot script: installs Docker, writes files, starts app
+    ├── main.tf                       # EC2 instance + security group
+    ├── variables.tf                  # key_pair_name (required), region, AMI, instance type
+    ├── outputs.tf                    # Public IP, app URL, SSH command
+    └── user_data.sh                  # Boot script: installs Docker, writes files, starts app
 ```
 
 ---
 
 ## Prerequisites
 
-- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.5
-- An AWS account with credentials configured (`~/.aws/credentials` or environment variables)
-- An existing EC2 key pair in `us-east-1`
+- Terraform >= 1.5
+- AWS credentials configured (`~/.aws/credentials` or environment variables)
+- An existing EC2 key pair in us-east-1
 
 ---
 
-## Deploy with Terraform
+## Deploy
 
 ### 1. Initialize
 
@@ -51,72 +61,61 @@ terraform init
 
 ### 2. Plan
 
-Replace `my-key-pair` with the name of your existing EC2 key pair.
-
 ```bash
-terraform plan -var="key_pair_name=my-key-pair"
+terraform plan -var="key_pair_name=your-key-name"
 ```
-
-Review the plan output. You should see one security group and one EC2 instance being created.
 
 ### 3. Apply
 
 ```bash
-terraform apply -var="key_pair_name=my-key-pair"
+terraform apply -var="key_pair_name=your-key-name"
 ```
 
-Type `yes` when prompted. Terraform will print the public IP and URLs when it finishes.
+Wait 3-5 minutes after apply finishes. The EC2 instance runs the boot script to install
+Docker, build the Flask image, and start all three containers.
 
-The EC2 instance runs its setup script on first boot. Wait 3–5 minutes after `apply` completes before testing the application.
-
-### 4. Destroy (when done)
+### 4. Destroy when done
 
 ```bash
-terraform destroy -var="key_pair_name=my-key-pair"
+terraform destroy -var="key_pair_name=your-key-name"
 ```
 
 ---
 
-## SSH into the Instance
-
-Use the public IP printed by Terraform:
+## SSH and Verify
 
 ```bash
-ssh -i ~/.ssh/my-key-pair.pem ec2-user@<PUBLIC_IP>
+ssh -i ~/.ssh/your-key-name.pem ec2-user@<PUBLIC_IP>
 ```
 
-### Verify everything is running
+Check container status:
 
 ```bash
 docker ps
 ```
 
-```bash
-docker logs flask_app
-```
-
-```bash
-docker logs nginx_proxy
-```
-
-```bash
-curl http://localhost:5000/health
-```
-
-```bash
-curl http://localhost:80
-```
+Check the boot log to confirm setup completed:
 
 ```bash
 cat /var/log/user_data.log
 ```
 
+Check Flask application logs:
+
 ```bash
 cat /var/log/flaskapp/app.log
 ```
 
+Test the Flask API directly (bypassing nginx):
+
 ```bash
-cat /var/log/scripts/health.log
+curl http://localhost:5000/api/players
+```
+
+Test through nginx:
+
+```bash
+curl http://localhost:80/api/players
 ```
 
 ---
@@ -124,39 +123,82 @@ cat /var/log/scripts/health.log
 ## Running the Scripts
 
 ```bash
-sudo /opt/scripts/health_check.sh
+sudo /opt/scripts/db_backup.sh
 ```
 
 ```bash
-sudo /opt/scripts/log_rotate.sh
+sudo /opt/scripts/check_containers.sh
 ```
 
 ```bash
-sudo /opt/scripts/deploy.sh
+sudo /opt/scripts/seed_players.sh
 ```
 
 ---
 
-## Practice Problems
+## Troubleshooting Challenges
 
-These problems require you to work directly against the running application using Linux command line tools. No answers or hints are provided.
+These require you to SSH into the EC2 instance and work directly against the running system.
+No answers or hints are provided.
 
-1. When you navigate to the public IP in a browser, you see an error instead of the frontend. Use Docker and standard Linux tools to identify the root cause and fix it without running `terraform apply` again.
+**1.** The page loads but the roster does not populate — the table shows an error instead of player names.
+Find the container that is causing the failure, read its logs, and identify the exact error message.
+Fix the problem without rebuilding images or running `terraform apply` again.
 
-2. The `/health` endpoint reports "uptime" based on how long the Flask process has been running, not how long the EC2 instance has been up. What command shows you actual system uptime? Write a one-liner that compares the two values side by side.
+**2.** After fixing the roster, exec into the Flask container and inspect all of its environment variables.
+Which variable was set incorrectly, what was its value, and what should it be?
+What is the difference between `localhost` and a service name inside a Docker network?
 
-3. You suspect the health check cron job stopped running. What files would you inspect to confirm whether the cron daemon is active and whether the job is scheduled correctly? List the exact commands.
+**3.** From inside the Flask container, use Python to test the database connection on both the wrong hostname
+and the correct one before making any changes. What exception is raised and what does it tell you?
 
-4. The `app.log` file has grown to several hundred megabytes. Without stopping the Flask container, rotate the log and verify that new requests are still being written to a fresh log file after the rotation.
+**4.** Inspect the Docker network that the containers share. Find the internal IP address of the Postgres container.
+Then use `nc` or Python's `socket` module to verify that port 5432 is open on that IP from inside the Flask container.
 
-5. Write a one-liner using `grep` and `awk` against `/var/log/flaskapp/app.log` that counts how many times each route (`/`, `/health`, `/logs`) has been called today.
+**5.** Exec into the Postgres container and connect to the basketball database using `psql`.
+List all tables. Query the players table directly with SQL. Then add a player using only SQL — no UI.
 
-6. A teammate reports that the Flask container has been restarting repeatedly. What command shows you container restart counts, and what command streams the container's live output so you can watch it crash in real time?
+**6.** The Flask app logs are stored both inside the container and on the EC2 host.
+Find both file paths. Confirm they are the same file by making a request and watching both locations update.
 
-7. You need to know the exact process ID of the Python interpreter running inside the Flask container. Find it using only commands run on the EC2 host (not inside the container).
+**7.** Stop the Flask container with `docker stop flask_app`. Watch what happens without doing anything else.
+How long does it take to come back? What configuration controls this behavior and where is it set?
 
-8. Write a new script at `/opt/scripts/disk_alert.sh` that prints `WARNING: disk usage at X%` if root filesystem usage exceeds 70%, and `OK` otherwise. Make it safe to call from cron.
+**8.** The Postgres container has a named Docker volume for its data. Find the volume name, inspect it,
+and locate the directory on the EC2 host filesystem where Postgres is physically writing its data files.
 
-9. Find all log entries in `/var/log/flaskapp/app.log` where `status_code` is not `200` and print them sorted by timestamp. Write this as a single pipeline command.
+**9.** The Postgres container is not exposed on any host port — you cannot connect to it directly from your laptop.
+Without modifying docker-compose.yml, connect to the database using `psql` from the EC2 host.
+What command lets you run `psql` without installing it on the host itself?
 
-10. The `/var/log/flaskapp/archive/` directory is accumulating rotated log files. Write a command that lists all archive files sorted by size (largest first) and prints the total disk space used by the archive directory.
+**10.** A deployment to a production system went wrong and you need to know exactly when each container was last
+started or restarted. Find the start time of all three containers. Then check the docker daemon logs to see
+if there were any container crash events in the last hour.
+
+---
+
+## Scripting Challenges
+
+Write each script from scratch. No starter code. Test it against the running system.
+
+**1.** `/opt/scripts/list_roster.sh`
+Connect to the database from the EC2 host and print the full player roster as a formatted text table,
+with column headers and aligned columns. The output should look clean when piped to `less`.
+
+**2.** `/opt/scripts/watch_errors.sh`
+Tail `/var/log/flaskapp/app.log` in real time. Print a highlighted alert line to stdout whenever
+a log entry contains `500`. The script should run until interrupted with Ctrl-C.
+
+**3.** `/opt/scripts/container_stats.sh`
+For each of the three containers (postgres_db, flask_app, nginx_proxy), print the container name,
+CPU usage percentage, and memory usage on a single line. Format the output so it is easy to read at a glance.
+
+**4.** `/opt/scripts/db_query.sh`
+Accept a player name (or partial name) as a command line argument.
+Query the players table for any row where the name contains that string (case-insensitive).
+Print the results. If no argument is given, print a usage message and exit with code 1.
+
+**5.** `/opt/scripts/log_rotate.sh`
+Copy `/var/log/flaskapp/app.log` to `/var/log/flaskapp/archive/` with a timestamp in the filename.
+Then truncate the original file to zero bytes without deleting it or restarting the Flask container.
+Print how many lines were in the log before rotation.

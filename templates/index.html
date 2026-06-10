@@ -3,48 +3,140 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flask App Monitor</title>
+    <title>Northside Ballers</title>
 </head>
 <body>
-    <h1>Flask App Monitor</h1>
-    <p>Server monitoring dashboard</p>
+    <h1>Northside Ballers</h1>
+    <h2>Team Roster</h2>
 
-    <div>
-        <button onclick="checkHealth()">Check Health</button>
-        <button onclick="viewLogs()">View Logs</button>
-    </div>
+    <p id="roster-error" style="color: red; display: none;"></p>
+
+    <table id="roster-table" border="1" cellpadding="6">
+        <thead>
+            <tr>
+                <th>Number</th>
+                <th>Name</th>
+                <th>Position</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="roster-body">
+            <tr><td colspan="4">Loading roster...</td></tr>
+        </tbody>
+    </table>
 
     <br>
-    <textarea id="output" rows="20" cols="80" readonly style="font-family: monospace;"></textarea>
+    <h3>Add Player</h3>
+
+    <form id="add-form">
+        <label>Name:
+            <input type="text" id="player-name" required>
+        </label>
+        <br><br>
+        <label>Position:
+            <select id="player-position">
+                <option value="PG">PG - Point Guard</option>
+                <option value="SG">SG - Shooting Guard</option>
+                <option value="SF">SF - Small Forward</option>
+                <option value="PF">PF - Power Forward</option>
+                <option value="C">C - Center</option>
+            </select>
+        </label>
+        <br><br>
+        <label>Jersey Number:
+            <input type="number" id="player-number" min="0" max="99" required>
+        </label>
+        <br><br>
+        <button type="submit">Add Player</button>
+    </form>
+
+    <p id="form-message"></p>
 
     <script>
-        function checkHealth() {
-            document.getElementById('output').value = 'Loading...';
-            fetch('/health')
-                .then(function(response) { return response.json(); })
+        function loadRoster() {
+            fetch('/api/players')
+                .then(function(res) { return res.json(); })
                 .then(function(data) {
-                    document.getElementById('output').value = JSON.stringify(data, null, 2);
+                    var error = document.getElementById('roster-error');
+                    var tbody = document.getElementById('roster-body');
+
+                    if (data.error) {
+                        error.textContent = 'Could not load roster: ' + data.error;
+                        error.style.display = 'block';
+                        tbody.innerHTML = '<tr><td colspan="4">Roster unavailable.</td></tr>';
+                        return;
+                    }
+
+                    error.style.display = 'none';
+
+                    if (data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4">No players on roster.</td></tr>';
+                        return;
+                    }
+
+                    tbody.innerHTML = '';
+                    data.forEach(function(player) {
+                        var row = document.createElement('tr');
+                        row.innerHTML =
+                            '<td>' + player.number + '</td>' +
+                            '<td>' + player.name + '</td>' +
+                            '<td>' + player.position + '</td>' +
+                            '<td><button onclick="removePlayer(' + player.id + ')">Remove</button></td>';
+                        tbody.appendChild(row);
+                    });
                 })
                 .catch(function(err) {
-                    document.getElementById('output').value = 'Error: ' + err;
+                    var error = document.getElementById('roster-error');
+                    error.textContent = 'Could not reach server: ' + err;
+                    error.style.display = 'block';
                 });
         }
 
-        function viewLogs() {
-            document.getElementById('output').value = 'Loading...';
-            fetch('/logs')
-                .then(function(response) { return response.json(); })
+        function removePlayer(id) {
+            if (!confirm('Remove this player from the roster?')) { return; }
+            fetch('/api/players/' + id, { method: 'DELETE' })
+                .then(function(res) { return res.json(); })
                 .then(function(data) {
-                    if (data.lines) {
-                        document.getElementById('output').value = data.lines.join('');
+                    if (data.error) {
+                        document.getElementById('form-message').textContent = 'Error: ' + data.error;
                     } else {
-                        document.getElementById('output').value = JSON.stringify(data, null, 2);
+                        loadRoster();
                     }
                 })
                 .catch(function(err) {
-                    document.getElementById('output').value = 'Error: ' + err;
+                    document.getElementById('form-message').textContent = 'Request failed: ' + err;
                 });
         }
+
+        document.getElementById('add-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var name = document.getElementById('player-name').value.trim();
+            var position = document.getElementById('player-position').value;
+            var number = parseInt(document.getElementById('player-number').value, 10);
+            var msg = document.getElementById('form-message');
+
+            fetch('/api/players', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, position: position, number: number })
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    msg.textContent = 'Error: ' + data.error;
+                } else {
+                    document.getElementById('player-name').value = '';
+                    document.getElementById('player-number').value = '';
+                    msg.textContent = name + ' added.';
+                    loadRoster();
+                }
+            })
+            .catch(function(err) {
+                msg.textContent = 'Request failed: ' + err;
+            });
+        });
+
+        loadRoster();
     </script>
 </body>
 </html>

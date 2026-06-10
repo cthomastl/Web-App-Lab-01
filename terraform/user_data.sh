@@ -1,8 +1,8 @@
 #!/bin/bash
 # user_data.sh
 # Runs once on first EC2 boot. Installs Docker, writes all application files,
-# starts the containers, and configures a health-check cron job.
-# Full output is logged to /var/log/user_data.log for post-boot debugging.
+# starts the three-container stack, and sets up a health-check cron job.
+# All output is logged to /var/log/user_data.log for post-boot debugging.
 
 set -e
 exec > >(tee /var/log/user_data.log) 2>&1
@@ -13,24 +13,19 @@ echo "=== user_data started at $(date) ==="
 # 1. System updates and package installation
 # -------------------------------------------------------------------------
 
-# Refresh all installed packages to pick up security patches
 yum update -y
 
-# amazon-linux-extras provides Docker as a curated extras package on Amazon Linux 2
+# docker is available as a curated package via amazon-linux-extras on AL2
 amazon-linux-extras install docker -y
-
-# Start the Docker daemon and configure it to start automatically on reboot
 systemctl start docker
 systemctl enable docker
 
-# Allow the default ec2-user to run Docker commands without sudo
+# Allow ec2-user to run docker commands without sudo
 usermod -aG docker ec2-user
 
-# Download the docker-compose v2 binary for x86_64
+# Install the docker-compose v2 binary for x86_64
 curl -SL "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-linux-x86_64" \
     -o /usr/local/bin/docker-compose
-
-# Mark the binary as executable
 chmod +x /usr/local/bin/docker-compose
 
 echo "Docker and docker-compose installed."
@@ -39,23 +34,20 @@ echo "Docker and docker-compose installed."
 # 2. Create directory structure
 # -------------------------------------------------------------------------
 
-# Application source code and Docker files live here
 mkdir -p /opt/app/templates
 mkdir -p /opt/app/nginx
-
-# Scripts directory on the host (referenced from README and cron)
+mkdir -p /opt/app/initdb
 mkdir -p /opt/scripts
-
-# Log directories: the Flask app writes here; the volume mount exposes it to the host
-mkdir -p /var/log/flaskapp/archive
+mkdir -p /var/log/flaskapp
 mkdir -p /var/log/scripts
+mkdir -p /var/backups/basketball
 
 echo "Directories created."
 
 # -------------------------------------------------------------------------
-# 3. Write application source files
-#    Each heredoc uses a unique single-quoted marker to prevent bash from
-#    expanding any variables or backticks inside the file content.
+# 3. Write application files
+#    Each heredoc uses a unique single-quoted marker so bash does not
+#    expand variables or backticks inside the file content.
 # -------------------------------------------------------------------------
 
 # --- app.py ---
@@ -63,92 +55,141 @@ cat > /opt/app/app.py << 'PYEOF'
 import os
 import time
 import logging
-from datetime import datetime
-from flask import Flask, jsonify, render_template
-import psutil
+from flask import Flask, jsonify, render_template, request
+import psycopg2
+import psycopg2.extras
 
 app = Flask(__name__)
 
 LOG_DIR = "/var/log/flaskapp"
 LOG_FILE = f"{LOG_DIR}/app.log"
-
 os.makedirs(LOG_DIR, exist_ok=True)
 
-file_handler = logging.FileHandler(LOG_FILE)
-file_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s %(message)s")
-file_handler.setFormatter(formatter)
-
-logger = logging.getLogger("flaskapp")
-logger.setLevel(logging.INFO)
-logger.addHandler(file_handler)
-
-START_TIME = time.time()
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-def log_request(route, status_code):
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    logger.info(f"timestamp={ts} route={route} status_code={status_code}")
+def get_db():
+    return psycopg2.connect(
+        host=os.environ.get("DB_HOST", "db"),
+        port=int(os.environ.get("DB_PORT", "5432")),
+        dbname=os.environ.get("DB_NAME", "basketball"),
+        user=os.environ.get("DB_USER", "flask"),
+        password=os.environ.get("DB_PASSWORD", "flaskpass"),
+    )
+
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS players (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            position VARCHAR(20),
+            number INTEGER
+        )
+        """
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 @app.route("/")
 def index():
-    log_request("/", 200)
+    logger.info("GET / 200")
     return render_template("index.html")
 
 
-@app.route("/health")
-def health():
-    disk = psutil.disk_usage("/")
-    mem = psutil.virtual_memory()
-
-    uptime_seconds = int(time.time() - START_TIME)
-    hours = uptime_seconds // 3600
-    minutes = (uptime_seconds % 3600) // 60
-    seconds = uptime_seconds % 60
-
-    data = {
-        "status": "ok",
-        "disk": {
-            "total_gb": round(disk.total / (1024 ** 3), 2),
-            "used_gb": round(disk.used / (1024 ** 3), 2),
-            "free_gb": round(disk.free / (1024 ** 3), 2),
-            "percent_used": disk.percent,
-        },
-        "memory": {
-            "total_gb": round(mem.total / (1024 ** 3), 2),
-            "used_gb": round(mem.used / (1024 ** 3), 2),
-            "available_gb": round(mem.available / (1024 ** 3), 2),
-            "percent_used": mem.percent,
-        },
-        "uptime": f"{hours}h {minutes}m {seconds}s",
-    }
-
-    log_request("/health", 200)
-    return jsonify(data)
-
-
-@app.route("/logs")
-def logs():
+@app.route("/api/players", methods=["GET"])
+def get_players():
     try:
-        with open(LOG_FILE, "r") as f:
-            lines = f.readlines()
-        last_50 = lines[-50:] if len(lines) > 50 else lines
-        log_request("/logs", 200)
-        return jsonify({"lines": last_50})
-    except FileNotFoundError:
-        log_request("/logs", 404)
-        return jsonify({"error": "Log file not found"}), 404
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, name, position, number FROM players ORDER BY number, name")
+        players = [dict(row) for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        logger.info(f"GET /api/players 200 ({len(players)} players)")
+        return jsonify(players)
+    except Exception as e:
+        logger.error(f"GET /api/players 500 - {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/players", methods=["POST"])
+def add_player():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    position = (data.get("position") or "").strip()
+    number = data.get("number")
+
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO players (name, position, number) VALUES (%s, %s, %s) RETURNING id",
+            (name, position, number),
+        )
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"POST /api/players 201 - id={new_id} name={name}")
+        return jsonify({"id": new_id, "name": name, "position": position, "number": number}), 201
+    except Exception as e:
+        logger.error(f"POST /api/players 500 - {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/players/<int:player_id>", methods=["DELETE"])
+def remove_player(player_id):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM players WHERE id = %s RETURNING id", (player_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if deleted is None:
+            logger.warning(f"DELETE /api/players/{player_id} 404 - not found")
+            return jsonify({"error": "Player not found"}), 404
+        logger.info(f"DELETE /api/players/{player_id} 200")
+        return jsonify({"deleted": player_id})
+    except Exception as e:
+        logger.error(f"DELETE /api/players/{player_id} 500 - {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
+    for attempt in range(15):
+        try:
+            init_db()
+            logger.info("Database initialized")
+            break
+        except Exception as e:
+            logger.warning(f"DB not ready ({attempt + 1}/15): {e}")
+            time.sleep(3)
+    else:
+        logger.error("Could not reach database after 15 attempts. API endpoints will return 500.")
+
     app.run(host="0.0.0.0", port=5000, debug=False)
 PYEOF
 
 # --- requirements.txt ---
 cat > /opt/app/requirements.txt << 'REQEOF'
 Flask==2.3.3
-psutil==5.9.5
+psycopg2-binary==2.9.9
 Werkzeug==2.3.7
 REQEOF
 
@@ -159,48 +200,140 @@ cat > /opt/app/templates/index.html << 'HTMLEOF'
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flask App Monitor</title>
+    <title>Northside Ballers</title>
 </head>
 <body>
-    <h1>Flask App Monitor</h1>
-    <p>Server monitoring dashboard</p>
+    <h1>Northside Ballers</h1>
+    <h2>Team Roster</h2>
 
-    <div>
-        <button onclick="checkHealth()">Check Health</button>
-        <button onclick="viewLogs()">View Logs</button>
-    </div>
+    <p id="roster-error" style="color: red; display: none;"></p>
+
+    <table id="roster-table" border="1" cellpadding="6">
+        <thead>
+            <tr>
+                <th>Number</th>
+                <th>Name</th>
+                <th>Position</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="roster-body">
+            <tr><td colspan="4">Loading roster...</td></tr>
+        </tbody>
+    </table>
 
     <br>
-    <textarea id="output" rows="20" cols="80" readonly style="font-family: monospace;"></textarea>
+    <h3>Add Player</h3>
+
+    <form id="add-form">
+        <label>Name:
+            <input type="text" id="player-name" required>
+        </label>
+        <br><br>
+        <label>Position:
+            <select id="player-position">
+                <option value="PG">PG - Point Guard</option>
+                <option value="SG">SG - Shooting Guard</option>
+                <option value="SF">SF - Small Forward</option>
+                <option value="PF">PF - Power Forward</option>
+                <option value="C">C - Center</option>
+            </select>
+        </label>
+        <br><br>
+        <label>Jersey Number:
+            <input type="number" id="player-number" min="0" max="99" required>
+        </label>
+        <br><br>
+        <button type="submit">Add Player</button>
+    </form>
+
+    <p id="form-message"></p>
 
     <script>
-        function checkHealth() {
-            document.getElementById('output').value = 'Loading...';
-            fetch('/health')
-                .then(function(response) { return response.json(); })
+        function loadRoster() {
+            fetch('/api/players')
+                .then(function(res) { return res.json(); })
                 .then(function(data) {
-                    document.getElementById('output').value = JSON.stringify(data, null, 2);
+                    var error = document.getElementById('roster-error');
+                    var tbody = document.getElementById('roster-body');
+
+                    if (data.error) {
+                        error.textContent = 'Could not load roster: ' + data.error;
+                        error.style.display = 'block';
+                        tbody.innerHTML = '<tr><td colspan="4">Roster unavailable.</td></tr>';
+                        return;
+                    }
+
+                    error.style.display = 'none';
+
+                    if (data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4">No players on roster.</td></tr>';
+                        return;
+                    }
+
+                    tbody.innerHTML = '';
+                    data.forEach(function(player) {
+                        var row = document.createElement('tr');
+                        row.innerHTML =
+                            '<td>' + player.number + '</td>' +
+                            '<td>' + player.name + '</td>' +
+                            '<td>' + player.position + '</td>' +
+                            '<td><button onclick="removePlayer(' + player.id + ')">Remove</button></td>';
+                        tbody.appendChild(row);
+                    });
                 })
                 .catch(function(err) {
-                    document.getElementById('output').value = 'Error: ' + err;
+                    var error = document.getElementById('roster-error');
+                    error.textContent = 'Could not reach server: ' + err;
+                    error.style.display = 'block';
                 });
         }
 
-        function viewLogs() {
-            document.getElementById('output').value = 'Loading...';
-            fetch('/logs')
-                .then(function(response) { return response.json(); })
+        function removePlayer(id) {
+            if (!confirm('Remove this player from the roster?')) { return; }
+            fetch('/api/players/' + id, { method: 'DELETE' })
+                .then(function(res) { return res.json(); })
                 .then(function(data) {
-                    if (data.lines) {
-                        document.getElementById('output').value = data.lines.join('');
+                    if (data.error) {
+                        document.getElementById('form-message').textContent = 'Error: ' + data.error;
                     } else {
-                        document.getElementById('output').value = JSON.stringify(data, null, 2);
+                        loadRoster();
                     }
                 })
                 .catch(function(err) {
-                    document.getElementById('output').value = 'Error: ' + err;
+                    document.getElementById('form-message').textContent = 'Request failed: ' + err;
                 });
         }
+
+        document.getElementById('add-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var name = document.getElementById('player-name').value.trim();
+            var position = document.getElementById('player-position').value;
+            var number = parseInt(document.getElementById('player-number').value, 10);
+            var msg = document.getElementById('form-message');
+
+            fetch('/api/players', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, position: position, number: number })
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    msg.textContent = 'Error: ' + data.error;
+                } else {
+                    document.getElementById('player-name').value = '';
+                    document.getElementById('player-number').value = '';
+                    msg.textContent = name + ' added.';
+                    loadRoster();
+                }
+            })
+            .catch(function(err) {
+                msg.textContent = 'Request failed: ' + err;
+            });
+        });
+
+        loadRoster();
     </script>
 </body>
 </html>
@@ -215,7 +348,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p /var/log/flaskapp/archive
+RUN mkdir -p /var/log/flaskapp
 
 COPY app.py .
 COPY templates/ templates/
@@ -225,9 +358,24 @@ EXPOSE 5000
 CMD ["python", "app.py"]
 DOCKEREOF
 
+# --- initdb/01_init.sql (runs automatically on first Postgres startup) ---
+cat > /opt/app/initdb/01_init.sql << 'SQLEOF'
+CREATE TABLE IF NOT EXISTS players (
+    id       SERIAL PRIMARY KEY,
+    name     VARCHAR(100) NOT NULL,
+    position VARCHAR(20),
+    number   INTEGER
+);
+
+INSERT INTO players (name, position, number) VALUES
+    ('Marcus Johnson', 'PG',  1),
+    ('Darius Cole',    'SG',  3),
+    ('Terrence Hill',  'SF',  7),
+    ('Andre Williams', 'PF', 15),
+    ('Devon Carter',   'C',  32);
+SQLEOF
+
 # --- nginx/nginx.conf ---
-# NOTE: The upstream block configures which host:port nginx forwards traffic to.
-# If nginx returns 502 Bad Gateway, start your investigation here.
 cat > /opt/app/nginx/nginx.conf << 'NGINXEOF'
 events {
     worker_connections 1024;
@@ -235,36 +383,57 @@ events {
 
 http {
     upstream flask_app {
-        server flask:5001;
+        server flask:5000;
     }
 
     server {
         listen 80;
 
         location / {
-            proxy_pass http://flask_app;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_pass         http://flask_app;
+            proxy_set_header   Host              $host;
+            proxy_set_header   X-Real-IP         $remote_addr;
+            proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
             proxy_connect_timeout 10s;
-            proxy_read_timeout 30s;
+            proxy_read_timeout    30s;
         }
     }
 }
 NGINXEOF
 
-# --- docker-compose.yml ---
+# --- docker-compose.yml (DB_HOST is intentionally wrong) ---
 cat > /opt/app/docker-compose.yml << 'COMPOSEEOF'
 version: '3.8'
 
 services:
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    environment:
+      POSTGRES_DB:       basketball
+      POSTGRES_USER:     flask
+      POSTGRES_PASSWORD: flaskpass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+
   flask:
     build: .
     container_name: flask_app
+    environment:
+      DB_HOST:     localhost
+      DB_PORT:     "5432"
+      DB_NAME:     basketball
+      DB_USER:     flask
+      DB_PASSWORD: flaskpass
     ports:
       - "5000:5000"
     volumes:
       - /var/log/flaskapp:/var/log/flaskapp
+    depends_on:
+      - db
     restart: unless-stopped
 
   nginx:
@@ -277,212 +446,162 @@ services:
     depends_on:
       - flask
     restart: unless-stopped
+
+volumes:
+  pgdata:
 COMPOSEEOF
 
 echo "Application files written."
 
 # -------------------------------------------------------------------------
-# 4. Write scripts to /opt/scripts/
+# 4. Write operator scripts
 # -------------------------------------------------------------------------
 
-cat > /opt/scripts/health_check.sh << 'HEALTHEOF'
+cat > /opt/scripts/db_backup.sh << 'BKEOF'
 #!/bin/bash
-# health_check.sh
-# Checks disk usage, memory usage, and whether the Flask container is running.
-# Prints a status report to stdout and appends it to /var/log/scripts/health.log.
+# db_backup.sh
+# Dumps the basketball PostgreSQL database to a timestamped SQL file on the EC2 host.
+# Backups are stored in /var/backups/basketball/.
+# Files older than 7 days are automatically deleted at the end of each run.
+#
+# HOW TO RUN:
+#   sudo /opt/scripts/db_backup.sh
 
-# Get the current timestamp in a human-readable format
-TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-
-# Get disk usage for the root filesystem.
-# df -h produces human-readable output; awk targets row 2 (the data row) and prints column 5 (Use%)
-DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}')
-
-# Get the free disk space on the root filesystem (column 4 of df output)
-DISK_FREE=$(df -h / | awk 'NR==2 {print $4}')
-
-# Read available memory in kilobytes from the kernel's memory info file
-MEM_AVAILABLE_KB=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-
-# Read total installed memory in kilobytes from the same file
-MEM_TOTAL_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-
-# Convert kilobytes to megabytes using integer division (bash does not support floats natively)
-MEM_AVAILABLE_MB=$((MEM_AVAILABLE_KB / 1024))
-MEM_TOTAL_MB=$((MEM_TOTAL_KB / 1024))
-
-# Calculate used memory by subtracting available from total
-MEM_USED_MB=$((MEM_TOTAL_MB - MEM_AVAILABLE_MB))
-
-# Check whether the Flask container is currently running.
-# docker ps lists only running containers; --format restricts output to container names only.
-# grep -q returns exit code 0 if the container name is found, 1 otherwise.
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "flask_app"; then
-    FLASK_STATUS="RUNNING"
-else
-    FLASK_STATUS="NOT RUNNING"
-fi
-
-# Also check the nginx proxy container status
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "nginx_proxy"; then
-    NGINX_STATUS="RUNNING"
-else
-    NGINX_STATUS="NOT RUNNING"
-fi
-
-# Build the full status report as a variable so it can be sent to both stdout and the log file
-STATUS_REPORT="[${TIMESTAMP}] Health Check Report
-  Disk Usage (root):   ${DISK_USAGE} used  (${DISK_FREE} free)
-  Memory:              ${MEM_USED_MB}MB used / ${MEM_TOTAL_MB}MB total (${MEM_AVAILABLE_MB}MB available)
-  Flask Container:     ${FLASK_STATUS}
-  Nginx Container:     ${NGINX_STATUS}"
-
-# Print the report to standard output for manual runs and cron email output
-echo "$STATUS_REPORT"
-
-# Create the scripts log directory if it does not yet exist
-mkdir -p /var/log/scripts
-
-# Append the same report to the persistent health log file
-echo "$STATUS_REPORT" >> /var/log/scripts/health.log
-
-# Write a separator line so individual runs are visually distinct in the log
-echo "---" >> /var/log/scripts/health.log
-HEALTHEOF
-
-cat > /opt/scripts/log_rotate.sh << 'ROTATEEOF'
-#!/bin/bash
-# log_rotate.sh
-# Archives the current Flask app.log to a timestamped file in the archive directory,
-# then resets app.log to an empty file so the application can continue logging cleanly.
-# This prevents the log file from growing without bound on a long-running server.
-
-# Define the path to the active Flask log file
-LOG_FILE="/var/log/flaskapp/app.log"
-
-# Define the directory that will hold archived (rotated) log files
-ARCHIVE_DIR="/var/log/flaskapp/archive"
-
-# Build a timestamp string using only characters safe in a filename (no spaces or colons)
+BACKUP_DIR="/var/backups/basketball"
+DB_CONTAINER="postgres_db"
+DB_USER="flask"
+DB_NAME="basketball"
 TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
+BACKUP_FILE="${BACKUP_DIR}/basketball_${TIMESTAMP}.sql"
 
-# Combine the archive directory path and the timestamp to form the archive filename
-ARCHIVE_FILE="${ARCHIVE_DIR}/app_${TIMESTAMP}.log"
+mkdir -p "$BACKUP_DIR"
 
-# Create the archive directory if it does not already exist
-mkdir -p "$ARCHIVE_DIR"
+echo "Starting backup of '${DB_NAME}' database..."
 
-# Check whether the log file we intend to rotate actually exists
-if [ -f "$LOG_FILE" ]; then
+# docker exec runs pg_dump inside the container; stdout is redirected to a file on the host
+docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" > "$BACKUP_FILE"
 
-    # Copy the current log file to the archive location with the timestamped name.
-    # Using cp (not mv) keeps the original inode in place, so the Flask process
-    # can keep writing to the same file descriptor without errors.
-    cp "$LOG_FILE" "$ARCHIVE_FILE"
-
-    # Confirm to the operator where the archive was written
-    echo "Archived: ${LOG_FILE} -> ${ARCHIVE_FILE}"
-
-    # Truncate the original log file to zero bytes to start it fresh.
-    # truncate -s 0 clears content while preserving permissions, ownership, and inode.
-    truncate -s 0 "$LOG_FILE"
-
-    # Confirm that the file has been cleared
-    echo "Cleared: ${LOG_FILE} is now empty and ready for new log entries"
-
+if [ $? -eq 0 ]; then
+    echo "Backup saved: ${BACKUP_FILE}"
+    ls -lh "$BACKUP_FILE"
 else
-    # The log file does not exist — print a warning but do not exit with an error
-    echo "WARNING: ${LOG_FILE} not found. Nothing to rotate."
-fi
-ROTATEEOF
-
-cat > /opt/scripts/deploy.sh << 'DEPLOYEOF'
-#!/bin/bash
-# deploy.sh
-# Rebuilds the Flask container from the latest local code and restarts it.
-# Records the deployment timestamp and outcome in /var/log/scripts/deploy.log.
-
-# The directory containing docker-compose.yml and the application source code
-APP_DIR="/opt/app"
-
-# The file where deployment events are recorded for audit and troubleshooting
-DEPLOY_LOG="/var/log/scripts/deploy.log"
-
-# Capture the timestamp at the moment the deployment begins
-TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-
-# Ensure the directory that holds the deploy log exists before writing to it
-mkdir -p /var/log/scripts
-
-# Write the start-of-deployment marker to both the terminal and the log file.
-# tee -a writes to the log file in append mode while also printing to stdout.
-echo "[${TIMESTAMP}] Deployment started" | tee -a "$DEPLOY_LOG"
-
-# Move into the application directory so docker-compose can find its config file
-cd "$APP_DIR" || { echo "ERROR: Cannot cd to ${APP_DIR}" | tee -a "$DEPLOY_LOG"; exit 1; }
-
-# Pull any updated upstream base images from the registry
-docker-compose pull --quiet 2>&1 | tee -a "$DEPLOY_LOG"
-
-# Rebuild only the Flask service image from the local Dockerfile.
-# --no-cache forces Docker to rebuild every layer, ensuring code changes are included.
-docker-compose build --no-cache flask 2>&1 | tee -a "$DEPLOY_LOG"
-
-# Recreate and start only the Flask container with the newly built image.
-# --no-deps prevents docker-compose from restarting the nginx container unnecessarily.
-# -d runs the container detached (in the background).
-docker-compose up -d --no-deps flask 2>&1 | tee -a "$DEPLOY_LOG"
-
-# Wait briefly for the container runtime to settle before checking status
-sleep 3
-
-# Verify that the Flask container is now showing as running
-if docker ps --format '{{.Names}}' | grep -q "flask_app"; then
-
-    # Container is in the running list — deployment succeeded
-    echo "[${TIMESTAMP}] Deployment SUCCESS: flask_app is running" | tee -a "$DEPLOY_LOG"
-
-else
-    # Container is not running — it may have crashed immediately after start
-    echo "[${TIMESTAMP}] Deployment FAILED: flask_app is not running" | tee -a "$DEPLOY_LOG"
-
-    # Print recent container logs to help diagnose the failure
-    echo "--- Container logs ---" | tee -a "$DEPLOY_LOG"
-    docker logs --tail 20 flask_app 2>&1 | tee -a "$DEPLOY_LOG"
-
-    # Return a non-zero exit code so calling scripts or CI systems detect failure
+    echo "ERROR: pg_dump failed. Check that container '${DB_CONTAINER}' is running."
+    rm -f "$BACKUP_FILE"
     exit 1
 fi
 
-# Separator line to visually separate entries in the deploy log
-echo "---" >> "$DEPLOY_LOG"
-DEPLOYEOF
+# Remove backup files older than 7 days to prevent unbounded disk growth
+DELETED=$(find "$BACKUP_DIR" -name "*.sql" -mtime +7 -delete -print | wc -l)
+echo "Cleaned up ${DELETED} backup(s) older than 7 days."
+BKEOF
 
-# Make all scripts executable so they can be run directly from the terminal
-chmod +x /opt/scripts/health_check.sh
-chmod +x /opt/scripts/log_rotate.sh
-chmod +x /opt/scripts/deploy.sh
+cat > /opt/scripts/check_containers.sh << 'CHKEOF'
+#!/bin/bash
+# check_containers.sh
+# Checks whether each required container is in the running state.
+# If any container is stopped, attempts to bring it back up with docker-compose.
+# Writes a status report to stdout and appends it to /var/log/scripts/containers.log.
+#
+# HOW TO RUN:
+#   sudo /opt/scripts/check_containers.sh
+
+APP_DIR="/opt/app"
+LOG_FILE="/var/log/scripts/containers.log"
+REQUIRED=("postgres_db" "flask_app" "nginx_proxy")
+TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+
+mkdir -p /var/log/scripts
+
+echo "[${TIMESTAMP}] Container status check" | tee -a "$LOG_FILE"
+
+ALL_OK=true
+
+for container in "${REQUIRED[@]}"; do
+    # docker ps only lists running containers; --format limits output to names
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+        echo "  [OK]   ${container}" | tee -a "$LOG_FILE"
+    else
+        echo "  [FAIL] ${container} is not running" | tee -a "$LOG_FILE"
+        ALL_OK=false
+    fi
+done
+
+if [ "$ALL_OK" = false ]; then
+    echo "  Attempting restart via docker-compose..." | tee -a "$LOG_FILE"
+    # docker-compose up -d starts any stopped services and leaves running ones alone
+    cd "$APP_DIR" && docker-compose up -d 2>&1 | tee -a "$LOG_FILE"
+else
+    echo "  All containers healthy." | tee -a "$LOG_FILE"
+fi
+
+echo "---" >> "$LOG_FILE"
+CHKEOF
+
+cat > /opt/scripts/seed_players.sh << 'SEEDEOF'
+#!/bin/bash
+# seed_players.sh
+# Wipes the players table and re-inserts the default starting roster.
+# Use this to reset the database to a known state during testing or after
+# accidentally deleting all players through the UI.
+#
+# HOW TO RUN:
+#   sudo /opt/scripts/seed_players.sh
+
+DB_CONTAINER="postgres_db"
+DB_USER="flask"
+DB_NAME="basketball"
+
+if ! docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
+    echo "ERROR: Container '${DB_CONTAINER}' is not running."
+    echo "Start it with: cd /opt/app && docker-compose up -d db"
+    exit 1
+fi
+
+echo "Seeding '${DB_NAME}' with the default roster..."
+
+# Pipe a SQL block into psql running inside the Postgres container.
+# docker exec -i keeps stdin open so the heredoc content is passed through.
+docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" << 'SQL'
+DELETE FROM players;
+ALTER SEQUENCE players_id_seq RESTART WITH 1;
+INSERT INTO players (name, position, number) VALUES
+    ('Marcus Johnson', 'PG',  1),
+    ('Darius Cole',    'SG',  3),
+    ('Terrence Hill',  'SF',  7),
+    ('Andre Williams', 'PF', 15),
+    ('Devon Carter',   'C',  32);
+SELECT id, number, name, position FROM players ORDER BY number;
+SQL
+
+if [ $? -eq 0 ]; then
+    echo "Roster seeded successfully."
+else
+    echo "ERROR: psql command failed."
+    exit 1
+fi
+SEEDEOF
+
+chmod +x /opt/scripts/db_backup.sh
+chmod +x /opt/scripts/check_containers.sh
+chmod +x /opt/scripts/seed_players.sh
 
 echo "Scripts written and made executable."
 
 # -------------------------------------------------------------------------
-# 5. Build and start the application
+# 5. Build and start the containers
 # -------------------------------------------------------------------------
 
 cd /opt/app
-
-# --build forces Docker to build the Flask image from the Dockerfile before starting
 docker-compose up -d --build
 
 echo "Containers started."
 
 # -------------------------------------------------------------------------
-# 6. Set up cron job to run health_check.sh every 5 minutes
-#    /etc/cron.d/ entries require: minute hour dom month dow user command
+# 6. Cron job: run check_containers.sh every 5 minutes
 # -------------------------------------------------------------------------
 
-echo "*/5 * * * * root /opt/scripts/health_check.sh > /dev/null 2>&1" > /etc/cron.d/flask_health_check
-chmod 644 /etc/cron.d/flask_health_check
+echo "*/5 * * * * root /opt/scripts/check_containers.sh > /dev/null 2>&1" > /etc/cron.d/container_watch
+chmod 644 /etc/cron.d/container_watch
 
 echo "Cron job configured."
 echo "=== user_data completed at $(date) ==="
